@@ -1,0 +1,7 @@
+.
+.gradle/
+releases/
+temp/
+output/
+bin/
+build/

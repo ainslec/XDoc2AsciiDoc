@@ -1,0 +1,18 @@
+apply plugin: 'java'
+
+repositories {
+    mavenCentral()
+}
+
+sourceCompatibility = 1.5
+targetCompatibility = 1.5
+
+jar {
+    baseName = 'x2a'
+    version =  '1.0.0'
+}
+
+task wrapper(type: Wrapper) {
+    gradleVersion = '2.3'
+}
+
