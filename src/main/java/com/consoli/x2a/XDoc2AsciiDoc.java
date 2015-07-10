@@ -28,6 +28,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,7 +50,9 @@ import java.util.regex.Pattern;
  */
 public class XDoc2AsciiDoc {
 	
-	private static final int MAX_RECURSION = 32;
+	private static final String STUNT_INDEX_ASC = "stunt_index.asc";
+
+	private static final int MAX_RECURSION = 100;
 
 	static final String CHAPTER_PATTERN_STR = "\\s*(chapter|section|section2|section3):([^\\)]+)\\[([^\\]]+)\\]\\s*";
 	
@@ -60,12 +63,14 @@ public class XDoc2AsciiDoc {
 	static final String REF_PATTERN_STR = "ref\\:([^\\[\\]]+)\\[([^\\[\\]]+)\\](.*)";
 	static final String LINK_PATTERN_STR = "link\\[([^\\[\\]]+)\\]\\s*\\[([^\\[\\]]+)\\](.*)";
 	
+	static final String HEADER_PATTERN_STR = "(document|authors|chapter-ref)\\[([^\\[\\]]+)\\]\\s*";
+	
 	static Pattern CHAPTER_PATTERN = Pattern.compile(CHAPTER_PATTERN_STR);
 	static Pattern CHAPTER_PATTERN_2 = Pattern.compile(CHAPTER_PATTERN_STR_2);
 	static Pattern IMAGE_PATTERN = Pattern.compile(IMAGE_PATTERN_STR);
 	static Pattern REF_PATTERN = Pattern.compile(REF_PATTERN_STR);
 	static Pattern LINK_PATTERN = Pattern.compile(LINK_PATTERN_STR);
-	
+	static Pattern HEADER_PATTERN = Pattern.compile(HEADER_PATTERN_STR);
 	
 	boolean isWithinOn         = false;
 	boolean isWithinCodeBlock  = false;
@@ -78,6 +83,7 @@ public class XDoc2AsciiDoc {
 	boolean isWithinListItem   = false;
 	boolean isOrderedList      = false;
 	boolean isWithinEmphasis   = false;
+
 	
 	File inputFolder  = null;
 	File outputFolder = null;
@@ -212,8 +218,7 @@ public class XDoc2AsciiDoc {
 		return retVal;
 	}
 
-	private static void handleSectionsWithReferenceMarkers(String[] matches,
-			StringBuilder sb) throws Exception {
+	private void handleSectionsWithReferenceMarkers(String[] matches, StringBuilder sb, File outputFile) throws Exception {
 		sb.append("[id=\""+matches[2]+"\"]"  + "\n");
 		
 		String type = matches[1];
@@ -224,6 +229,7 @@ public class XDoc2AsciiDoc {
 			// Chapters are one level down in asciidoc
 			// The document title is the first level ... 
 			prefix = "## ";
+			_chapterIdToFileIdMap.put(matches[2], outputFile.getName());
 		} else if ("section".equals(type)) {
 			prefix = "### ";
 		} else if ("section2".equals(type)) {
@@ -237,7 +243,10 @@ public class XDoc2AsciiDoc {
 		sb.append(prefix + matches[3] + "\n");
 	}
 	
-	private static void handleSectionsWithReferenceMarkers2(String[] matches, StringBuilder sb) throws Exception {
+	
+	HashMap<String, String> _chapterIdToFileIdMap = new HashMap<String, String>();
+	
+	private void handleSectionsWithReferenceMarkers2(String[] matches, StringBuilder sb, File outputFile) throws Exception {
 		String type = matches[1];
 		
 		String prefix = "";
@@ -246,6 +255,9 @@ public class XDoc2AsciiDoc {
 			// Chapters are one level down in asciidoc
 			// The document title is the first level ... 
 			prefix = "## ";
+			
+			_chapterIdToFileIdMap.put(matches[2], outputFile.getName());
+			
 		} else if ("section".equals(type)) {
 			prefix = "### ";
 		} else if ("section2".equals(type)) {
@@ -257,6 +269,35 @@ public class XDoc2AsciiDoc {
 		}
 		
 		sb.append(prefix + matches[2] + "\n");
+	}
+	
+	private void handleHeaderItem(String[] matches, StringBuilder sb, File outputFile) throws Exception {
+		String type = matches[1];
+
+		if ("document".equals(type)) {
+			sb.append("= " + matches[2] + "\n");
+		} else if ("authors".equals(type)) {
+			sb.append( matches[2] + "\n");
+			sb.append( ":doctype: book\n");
+			sb.append( ":encoding: utf-8\n");
+			sb.append( ":lang: en\n");
+			sb.append( ":toc: left\n");
+			sb.append( ":toclevels: 2\n");
+			sb.append( ":numbered:\n");
+			sb.append( "\n");
+		} else if ("chapter-ref".equals(type)) {
+			final String chapterId = matches[2];
+			
+			
+			String fileName = _chapterIdToFileIdMap.get(chapterId);
+			fileName = fileName == null ? chapterId : fileName;
+			sb.append("include::" + fileName + "[]\n");
+		
+		} else {
+			throw new Exception("Invalid header item : " + type);
+		}
+		
+		
 	}
 
 	private static String[] match(Pattern p, String currentLine) {
@@ -274,7 +315,7 @@ public class XDoc2AsciiDoc {
 	}
 	
 	int _listItemDepth = 0;
-	private void processFile(File inputFile, File outputFile) throws Exception {
+	private void processFile(String inputFileAsString, File outputFile, boolean isHeaderFile) throws Exception {
 		
 		
 		isWithinOn         = false;
@@ -289,7 +330,7 @@ public class XDoc2AsciiDoc {
 		isOrderedList      = false;
 		isWithinEmphasis   = false;
 		_listItemDepth     = 0;
-		String inputFileAsString = fileToString(inputFile, "UTF8");
+		tableRow           = 0;
 		
 		
 		BufferedReader br = null;
@@ -305,7 +346,7 @@ public class XDoc2AsciiDoc {
 			StringBuilder listItemSB = new StringBuilder();
 			
 			while ( (currentLine = br.readLine()) != null ) {
-				handleLine(currentLine, sb, dataCellSB, listItemSB, 0);
+				handleLine(currentLine, sb, dataCellSB, listItemSB, 0, outputFile);
 			}
 			
 			
@@ -315,86 +356,111 @@ public class XDoc2AsciiDoc {
 			try { br.close();} catch (Exception e) {e.printStackTrace();}
 		}
 		
+		if (isHeaderFile) {
+			sb.append("include::"+STUNT_INDEX_ASC+"[]\n");
+		}
+		
 		stringToFile(sb.toString(), outputFile, null, true);
 	}
 	
-	
+	int tableRow = 0;
 	private static int findIndexOfNextReservedToken(String currentLine) {
-		int indexOf = -1;
 
+		if (currentLine.startsWith("]")) {
+			return 0;
+		}
+		int retVal = Integer.MAX_VALUE;
+		
+		int indexOf;
 		/**
 		 * Slow implementation - I know this
 		 */
 		
 		indexOf = currentLine.indexOf("e[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 
 		indexOf = currentLine.indexOf("td[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 
 		indexOf = currentLine.indexOf("tr[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 
 		indexOf = currentLine.indexOf("table[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 
 		indexOf = currentLine.indexOf("ref:");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 		
 		indexOf = currentLine.indexOf("img[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 		indexOf = currentLine.indexOf("ol[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 		indexOf = currentLine.indexOf("ul[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 		indexOf = currentLine.indexOf("item[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 		
 		indexOf = currentLine.indexOf("link[");
-		if (indexOf != -1) {
-			return indexOf;
+		if (indexOf != -1 && indexOf < retVal) {
+			retVal = indexOf;
 		}
 		
+	
+		int numChars = currentLine.length();
 		
-		indexOf = currentLine.indexOf("]");
-		if (indexOf != -1) {
-			if (indexOf > 0 && currentLine.charAt(indexOf-1)== '\\') {
-				indexOf = -1;
+		boolean previousWasBackslash = false;
+		
+		for (int i=0; i < numChars; i++) {
+			char currentChar = currentLine.charAt(i);
+			
+			if (currentChar == '\\') {
+				previousWasBackslash = true;
 			} else {
-				return indexOf;
+				if (currentChar == ']') {
+					if (!previousWasBackslash) {
+						if (i < retVal) {
+							retVal = i;
+							break;
+						}
+
+					}
+					
+				}
+				previousWasBackslash = false;
 			}
 		}
 		
-		return -1;
+		
+		return retVal == Integer.MAX_VALUE ? -1 : retVal;
 	}
 	
 	private String escapeRegularText(String text) {
 		if (isWithinTableData) {
-			return text.replace("|", "\\|");
+			return text.replace("|", "\\|").replace("\\[", "[").replace("\\]", "]");
 		} else {
-			return text;
+			return text.replace("\\[", "[").replace("\\]", "]");
 		}
 	}
 	
-	protected void handleLine(String currentLine, StringBuilder sb, StringBuilder dataCellSB, StringBuilder listItemSB, int depth) throws Exception {
+	protected void handleLine(String currentLine, StringBuilder sb, StringBuilder dataCellSB, StringBuilder listItemSB, int depth, File outputFile) throws Exception {
 
 		if (depth == MAX_RECURSION) {
 			throw new Exception("Recursion exception .... debugger time ... ");
@@ -403,9 +469,13 @@ public class XDoc2AsciiDoc {
 		String[] matches = null;
 		
 		if ((matches = match(CHAPTER_PATTERN, currentLine)) != null) {
-			handleSectionsWithReferenceMarkers(matches, sb);
+			handleSectionsWithReferenceMarkers(matches, sb, outputFile);
 		} else if ((matches = match(CHAPTER_PATTERN_2, currentLine)) != null) {
-			handleSectionsWithReferenceMarkers2(matches, sb);
+			handleSectionsWithReferenceMarkers2(matches, sb, outputFile);
+		} else if ((matches = match(HEADER_PATTERN, currentLine)) != null) {
+			
+			handleHeaderItem(matches, sb, outputFile);
+			
 		} else if (currentLine.startsWith("on[")){
 			isWithinOn = true;
 			sb.append("----\n");
@@ -418,20 +488,21 @@ public class XDoc2AsciiDoc {
 			sb.append("[options=\"compact\"]\n" );
 			String newLine = moveForwardToFirstNonWhitespace(currentLine, 3);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			}
 		} else if (currentLine.startsWith("tr[")) {
 			isWithinTableRow = true;
+			tableRow++;
 			String newLine = moveForwardToFirstNonWhitespace(currentLine, 3);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			}
 		} else if (currentLine.startsWith("e[")) {
 			isWithinEmphasis = true;
 			sb.append("*" );
 			String newLine = moveForwardToFirstNonWhitespace(currentLine, 2);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			}
 		} else if (currentLine.startsWith("item[")) {
 			
@@ -441,7 +512,7 @@ public class XDoc2AsciiDoc {
 			
 			String newLine = moveForwardToFirstNonWhitespace(currentLine, 5);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			}
 			
 			
@@ -452,7 +523,7 @@ public class XDoc2AsciiDoc {
 			
 			String newLine = moveForwardToFirstNonWhitespace(currentLine, 3);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			}
 			
 		} else if (currentLine.startsWith("ref:")) {
@@ -478,7 +549,7 @@ public class XDoc2AsciiDoc {
 			
 			String newLine = moveForward(currentLine, lengthOfMatch);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			} else {
 				sb.append("\n");
 			}
@@ -506,7 +577,7 @@ public class XDoc2AsciiDoc {
 			
 			String newLine = moveForward(currentLine, lengthOfMatch);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			} else {
 				sb.append("\n");
 			}
@@ -528,7 +599,7 @@ public class XDoc2AsciiDoc {
 			
 			String newLine = moveForward(currentLine, lengthOfMatch);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			} else {
 				sb.append("\n");
 			}
@@ -538,7 +609,7 @@ public class XDoc2AsciiDoc {
 			
 			String newLine = moveForwardToFirstNonWhitespace(currentLine, 6);
 			if (newLine != null) {
-				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+				handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 			}
 
 		} else if (currentLine.startsWith("]") && ((isWithinOn || isWithinCodeBlock)  )){
@@ -574,10 +645,12 @@ public class XDoc2AsciiDoc {
 								if (isWithinTableRow) {
 									sb.append("\n");
 									isWithinTableRow = false;
+									tableRow--;
 								} else {
 									if (isWithinTable) {
 										sb.append("|========\n");
 										isWithinTable = false;
+										tableRow = 0;
 									} else {
 										sb.append("----\n");
 										isWithinOn = false;
@@ -591,7 +664,7 @@ public class XDoc2AsciiDoc {
 				
 				String newLine = isDisgardWhitespaceThatFollows ? moveForwardToFirstNonWhitespace(currentLine, 1) : moveForward(currentLine, 1);
 				if (newLine != null) {
-					handleLine(newLine, sb, dataCellSB, listItemSB, depth+1);
+					handleLine(newLine, sb, dataCellSB, listItemSB, depth+1, outputFile);
 				} else if (isAddLinefeedOnEOL) {
 					sb.append("\n");
 				}
@@ -611,7 +684,7 @@ public class XDoc2AsciiDoc {
 				
 				if (currentLine.endsWith("]") && currentLine.length() > 1 && currentLine.charAt(currentLine.length()-2) != '\\') {
 					sb.append(currentLine.substring(0, currentLine.length()-1).replace("\\[", "[").replace("\\]", "]")).append("\n");
-					handleLine("]", sb, dataCellSB, listItemSB, depth+1);
+					handleLine("]", sb, dataCellSB, listItemSB, depth+1, outputFile);
 				} else {
 					sb.append(currentLine.replace("\\[", "[").replace("\\]", "]")).append("\n");	
 				}
@@ -656,7 +729,7 @@ public class XDoc2AsciiDoc {
 					
 					final String escapeRegularText = escapeRegularText(s1);
 					sb.append(escapeRegularText);
-					handleLine(s2, sb, dataCellSB, listItemSB, depth+1);
+					handleLine(s2, sb, dataCellSB, listItemSB, depth+1, outputFile);
 				}
 
 			}
@@ -686,24 +759,65 @@ public class XDoc2AsciiDoc {
 			
 			@Override
 			public boolean accept(File pathname) {
-			//	if (pathname.getName().indexOf("070") != -1) {
-				if (pathname.isFile() && pathname.getName().endsWith(".xdoc") ) {
+				final String name = pathname.getName();
+				if (pathname.isFile() && name.endsWith(".xdoc")  ) {
 					return true;
 				} else {
 					return false;
 				}
-			//	} else {
-			//		return false;
-			//	}
 			}
 		});
 	
-		for (File f : files) {
-			System.out.println("Processing : " + f.getAbsolutePath());
-			processFile(f, new File (outputFolder, f.getName().substring(0, f.getName().length()-5) + ".asciidoc"));
+		String[] fileContentArray = new String[files.length];
+		
+		int indexOfDocumentFile = -1;
+		
+		for (int i = 0 ; i < files.length; i++) {
+			File f = files[i];
+			String inputFileAsString = fileToString(f, "UTF8");
+			
+			if (inputFileAsString.startsWith("document")) {
+				if (indexOfDocumentFile != -1) {
+					throw new Exception("Two or more files cannot start with 'document' in the same folder : " + f.getAbsolutePath() + ", " + files[indexOfDocumentFile].getAbsolutePath());
+				}
+				indexOfDocumentFile = i;
+			}
+			fileContentArray[i] = inputFileAsString;
 		}
 		
+		/**
+		 * Read all files before the header file, so that we have a table of sections to files
+		 */
+		for (int i = 0 ; i < files.length; i++) {
+			if (indexOfDocumentFile != i) {
+				File f = files[i];
+				System.out.println("Processing : " + f.getAbsolutePath());
+				String s = fileContentArray[i];
+				processFile(s, new File (outputFolder, calcOutputFilename(f)), false);
+				fileContentArray[i] = null;
+			}
+		}
+		
+		
+		
+		if (indexOfDocumentFile != -1) {
+			
+			stringToFile("[index]\n== Dummy Index", new File (outputFolder,STUNT_INDEX_ASC), null, true);
+			
+			File f = files[indexOfDocumentFile];
+			System.out.println("Processing : " + f.getAbsolutePath());
+			String s = fileContentArray[indexOfDocumentFile];
+			processFile(s, new File (outputFolder, calcOutputFilename(f)), true);
+		}
+		
+		
+		
+		
 		System.out.println("All "+files.length+" files processed OK... ");
+	}
+
+	protected String calcOutputFilename(File f) {
+		return f.getName().substring(0, f.getName().length()-5).replace(" ", "_").replace("-", "_") + ".asc";
 	}
 	
 	
